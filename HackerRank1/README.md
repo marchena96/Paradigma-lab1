@@ -2,15 +2,15 @@
 A company is launching a library management service. The service will be a web API layer built using .NET, with an existing prepared infrastructure. Implement two controllers: in LibrariesController, add the DELETE method, and in BooksController, implement the POST, and GET methods as per the guidelines below. Additionally, implement corresponding services for the controllers, and register these services in the Startup.cs file to enable Dependency Injection.
 
 ## Environment
-- .NET version: 6.0
+- .NET version: 8.0 (el proyecto real compila con `net8.0`; la especificación original indicaba 6.0)
 
 ## Read-Only Files
-- LibraryService.Tests/IntegrationTests.cs
+- LibraryService.Integration.Test/IntegrationTest.cs
 
 ## Commands
 - run:  
 ```
-dotnet clean && dotnet restore && dotnet run --project LibraryService.WebAPI
+dotnet clean && dotnet restore && dotnet run --project HackerRank1
 ```
 - install:  
 ```
@@ -21,6 +21,25 @@ dotnet clean && dotnet build
 dotnet restore && dotnet build && dotnet test --logger xunit --results-directory ./reports/
 ```
 
+## Setup local y credenciales
+
+El repositorio **no contiene credenciales reales** (decisión de seguridad). La connection string en `appsettings.json` usa el placeholder `[SUPABASE-PASSWORD]`.
+
+Para ejecutar la API en local hay que registrar la credencial real en **User Secrets** (solo se cargan en entorno `Development`):
+
+```powershell
+cd HackerRank1
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=<host>;Port=5432;Database=postgres;Username=<user>;Password=<password>;SSL Mode=Require;Trust Server Certificate=true;Pooling=false"
+```
+
+Pasos:
+1. Tener acceso a una BD PostgreSQL válida (el proyecto Supabase existente o uno propio).
+2. Ejecutar el comando anterior con tus credenciales (desde `HackerRank1/`).
+3. `dotnet run --project HackerRank1`.
+
+> ⚠️ Sin credenciales válidas la app compila, pero falla al conectar con la BD al arrancar (`db.Database.Migrate()` en `Startup.cs`).
+> ⚠️ `dotnet run` sin `--project` falla en la raíz de la solución porque hay dos proyectos.
+
 ## Sample Data
 Here is an example of a library model JSON object:
 
@@ -29,7 +48,7 @@ Here is an example of a library model JSON object:
     id: 5,
     name: "Library name",
     location: "2838 Violet Ct, Columbus, IN 47201, USA"
-}� 
+}� 
 ```
 
 Here is an example of a book model JSON object:
@@ -40,7 +59,7 @@ Here is an example of a book model JSON object:
     name: "The Norton Anthology of English Literature",
     category: "Anthology",
     libraryId: 5
-}� 
+}� 
 ```
 
 ## Requirements
