@@ -342,3 +342,99 @@ dotnet test
 | Carpeta `IntegrationTest/` huérfana | No está incluida en la solución | Ignorable |
 | Login con credenciales hardcodeadas | `admin`/`1234` y `SecretKey` en `appsettings.json` | Solo ambiente de lab; no usar en producción |
 | `.github/workflows/` vacío | No hay CI configurado | — |
+
+---
+
+## 10. Plan de implementación de endpoints
+
+> Estado: **aprobado** — este plan se documenta ANTES de tocar código y su ejecución se registra en la sección 11.
+
+### 10.1 Alcance
+
+| Archivo | Cambio |
+|---|---|
+| `Services/LibraryService.cs` | Implementar `Delete(Library)` (era `NotImplementedException`) |
+| `Services/BookService.cs` | Implementar `Add`, `Update`, `Delete` (eran `NotImplementedException`) |
+| `Controllers/LibrariesController.cs` | Agregar `DELETE api/libraries/{libraryId}` |
+| `Controllers/BooksController.cs` | Agregar `POST api/libraries/{libraryId}/books` + validar librería en `GET` |
+
+Sin cambios en `Startup.cs` (DI ya registrada) ni en la BD (no requiere nueva migración).
+
+### 10.2 Orden de trabajo (por dependencias)
+
+**Fase 1 — Servicios** (los controllers dependen de ellos):
+1. `LibrariesService.Delete` → `Remove` + `SaveChangesAsync` + `return true`. Los libros asociados los borra la FK con CASCADE a nivel BD.
+2. `BooksService.Add` → `AddAsync` + `SaveChangesAsync` + `return book`.
+3. `BooksService.Update` → buscar por `Id`, sobreescribir campos, `Update` + guardar.
+4. `BooksService.Delete` → `Remove` + guardar + `return true`.
+
+**Fase 2 — Controllers**:
+5. `LibrariesController.Delete` → buscar librería; `null` ⇒ 404; existe ⇒ borrar ⇒ 204.
+6. `BooksController.GetAll` → validar existencia de la librería; `null` ⇒ 404; si no ⇒ lista (200).
+7. `BooksController.Add` (POST) → recibir `BookForm`, validar librería ⇒ 404; mapear a `Book` (`LibraryId` de la ruta, `Category ?? string.Empty`); `Add` ⇒ **201**.
+
+**Fase 3 — Verificación**:
+8. `dotnet build` → 0 errores.
+9. `dotnet test --project LibraryService.Integration.Test` → 3 tests en verde.
+10. Smoke test manual contra Supabase (POST/GET books, DELETE library).
+
+### 10.3 Decisiones de diseño
+
+| Decisión | Resolución | Motivo |
+|---|---|---|
+| Body del POST books | Usar **`BookForm`** (DTO) y mapear a entidad | Contrato camelCase del README + permite default de `Category` |
+| `Category` ausente en el body | Default a `string.Empty` | NOT NULL en Postgres; los tests no la envían |
+| Borrado de libros al eliminar librería | Vía FK **CASCADE** de la BD | Ya definido en la migración `InitialCreate` |
+| Endpoints books `PUT`/`DELETE` | Se implementan los servicios pero **no** se exponen endpoints | El lab solo exige POST y GET para books |
+| Respuesta del POST | **201 Created** | Lo exige README y tests |
+
+### 10.4 Contrato de comportamiento (verificado contra `IntegrationTest.cs`)
+
+| Caso | Request | Respuesta esperada |
+|---|---|---|
+| POST book a librería existente | `POST /api/libraries/1/books` `{"name": "..."}` | **201** |
+| POST book a librería inexistente | `POST /api/libraries/100/books` | **404** |
+| GET books de librería existente | `GET /api/libraries/1/books` | **200** con lista |
+| GET books de librería inexistente | `GET /api/libraries/31232/books` | **404** |
+| DELETE librería existente | `DELETE /api/libraries/1` | **204** |
+| GET books tras borrar librería | `GET /api/libraries/1/books` | **404** |
+| DELETE librería inexistente | `DELETE /api/libraries/1` | **404** |
+
+---
+
+## 11. Ejecución del plan (log de implementación)
+
+> Estado final: **plan completado y 3/3 tests de integración en verde.**
+
+### 11.1 Código implementado
+
+| Archivo | Cambio |
+|---|---|
+| `HackerRank1/Services/LibraryService.cs` | Implementado `Delete` (`Remove` + `SaveChangesAsync` + `return true`) |
+| `HackerRank1/Services/BookService.cs` | Implementados `Add`, `Update` y `Delete` |
+| `HackerRank1/Controllers/LibrariesController.cs` | Añadido `DELETE /api/libraries/{libraryId}` → 404 si no existe, **204** en éxito |
+| `HackerRank1/Controllers/BooksController.cs` | `GET` valida la librería (404) y devuelve la lista; `POST` recibe `BookForm`, hace default de `Category` a `string.Empty` y responde **201** vía `CreatedAtAction` |
+
+### 11.2 Problemas encontrados y resolución
+
+| # | Problema | Causa raíz | Resolución |
+|---|---|---|---|
+| 1 | Tests fallaban con `MissingMethodException ... ConventionSet.get_ModelFinalizingConventions()` | El proyecto de tests apuntaba a EF Core/SQLite **6.0.0** contra EF Core **8.0.2** de la API | Subir paquetes del proyecto de tests a `Microsoft.AspNetCore.Mvc.Testing 8.0.16`, `EFCore.InMemory 8.0.2`, `EFCore.Sqlite 8.0.2` |
+| 2 | `Migrate()` en `Startup.cs` chocaba con `EnsureCreated()` de SQLite en los tests | El auto-migrado se ejecutaba también sobre el contexto SQLite en memoria | Guard: auto-migración solo si el proveedor **no es SQLite** (`ProviderName?.Contains("Sqlite")`) y hay migraciones pendientes |
+| 3 | `Scheme already exists: Bearer` al arrancar los tests | `ConfigureServices` se ejecutaba dos veces (host de `Program` + `UseStartup<Startup>` del propio test) | Guard de idempotencia al inicio de `ConfigureServices`: si `JwtSettings` ya está registrado, retorna sin volver a configurar |
+| 4 | POST books devolvía **400 `The Category field is required.`** y `/login` **400 `The Role field is required.`** | Con `Nullable=enable` + `[ApiController]`, las propiedades `string` no-nulables se vuelven obligatorias implícitamente | `BookForm.Category` y `User.Role` pasan a `string?` |
+| 5 | Los tests esperaban endpoints de books **públicos** (sin token) pero había `[Authorize]` | La autenticación JWT es scaffolding previo; el contrato del lab no exige auth en books | Quitar `[Authorize]` de `GET`/`POST` books |
+
+### 11.3 Auditoría de inicio (recomendaciones aplicadas)
+
+1. `BookForm.cs`: atributos Newtonsoft `[JsonProperty]` → **`[JsonPropertyName]`** (System.Text.Json).
+2. Eliminado `DTO/LibraryForm.cs` (sin uso).
+3. `HackerRank1.csproj`: quitados `MSTest.TestFramework` (paquete de testing en producción) y `Newtonsoft.Json` (ya no usado).
+4. `LibraryService.Integration.Test.csproj`: agregados `MSTest.TestFramework 3.8.2` y `Newtonsoft.Json 13.0.3` (dependencias propias del proyecto de tests; antes llegaban por transición).
+5. Eliminada la carpeta huérfana `IntegrationTest/` (proyecto de tests viejo, net6.0, EF 6.0.0, fuera de la solución).
+
+### 11.4 Verificación final
+
+- `dotnet build`: **0 errores**, 22 warnings (nullable CS86xx preexistentes, ninguno bloqueante).
+- `dotnet test "LibraryService.Integration.Test\LibraryService.Integration.Test.csproj"`: **3/3 Correctas** (TestAddBook_Ok_GetBook_NotFound, TestGetBooks_Ok_NotFound, TestDeleteLibrary).
+- Verificación en vivo contra Supabase: la app arranca con `Now listening on: https://localhost:7098`, se conecta a Postgres, `POST/GET/DELETE` de libraries y books responden según el contrato.

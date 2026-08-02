@@ -1,18 +1,18 @@
-﻿using Newtonsoft.Json;
+﻿using System.Text.Json.Serialization;
 
 namespace LibraryService.WebAPI.DTO;
 
 public class BookForm
 {
-    [JsonProperty("id")]
+    [JsonPropertyName("id")]
     public int Id { get; set; }
 
-    [JsonProperty("name")]
+    [JsonPropertyName("name")]
     public string Name { get; set; }
 
-    [JsonProperty("category")]
-    public string Category { get; set; }
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
 
-    [JsonProperty("libraryId")]
+    [JsonPropertyName("libraryId")]
     public int LibraryId { get; set; }
 }

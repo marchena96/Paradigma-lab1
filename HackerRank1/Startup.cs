@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Linq;
 using System.Text;
 
 namespace LibraryService.WebAPI
@@ -29,6 +30,15 @@ namespace LibraryService.WebAPI
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            // La WebApplicationFactory de los tests puede invocar ConfigureServices más de una vez
+            // (el host de Program y el UseStartup<Startup> del propio test registran Startup).
+            // Este guard hace la configuración idempotente y evita registros duplicados
+            // (p. ej. "Scheme already exists: Bearer").
+            if (services.Any(d => d.ServiceType == typeof(JwtSettings)))
+            {
+                return;
+            }
+
             // 1. jwtSettings binding
             var jwtSettings = Configuration
                                 .GetSection("JwtSettings")
@@ -121,7 +131,16 @@ namespace LibraryService.WebAPI
             using (var scope = app.ApplicationServices.CreateScope())
             {
                 var db = scope.ServiceProvider.GetRequiredService<LibraryContext>();
-                db.Database.Migrate();
+
+                // Los tests de integración sustituyen el contexto por SQLite en memoria
+                // (creado con EnsureCreated, sin historial de migraciones); Migrate() entraría
+                // en conflicto con ese esquema ya creado. La auto-migración aplica solo al
+                // proveedor real (PostgreSQL/Npgsql) y únicamente cuando hay migraciones pendientes.
+                var isSqliteTestDb = db.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true;
+                if (!isSqliteTestDb && db.Database.GetPendingMigrations().Any())
+                {
+                    db.Database.Migrate();
+                }
             }
 
             app.UseRouting();
